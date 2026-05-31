@@ -1,8 +1,11 @@
-#!/usr/bin/env python3
-"""Dataset helpers for LPI spectrogram classification.
-
-The code intentionally avoids torchvision, so it can run in minimal PyTorch
-installations.
+"""
+Этот файл отвечате за работу с датасетами и может выполнять:
+— поиск изображений спектрограмм;
+— определение классов;
+— загрузку изображений;
+— нормировку
+— аугментацию;
+— извлечение ОСШ из metadata.csv или имени файла.
 """
 
 from __future__ import annotations
@@ -18,7 +21,10 @@ from PIL import Image, ImageEnhance, ImageFilter
 import torch
 from torch.utils.data import Dataset
 
+# Допустимые форматы изображений частотно-временных портретов
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+# Фиксированный порядок классов LPI-сигналов для воспроизводимого кодирования меток
 DEFAULT_CLASSES = [
     "Rect",
     "LFM",
@@ -36,6 +42,7 @@ DEFAULT_CLASSES = [
 ]
 
 
+# Определяет корневую папку разбиений датасета: либо data_root, либо data_root/images
 def resolve_dataset_root(data_root: str) -> Path:
     root = Path(data_root).expanduser().resolve()
     if (root / "train").is_dir():
@@ -47,6 +54,7 @@ def resolve_dataset_root(data_root: str) -> Path:
     )
 
 
+# Ищет metadata.csv в нескольких возможных местах структуры датасета
 def find_metadata_path(original_root: str, split_root: Path) -> Optional[Path]:
     root = Path(original_root).expanduser().resolve()
     candidates = [
@@ -60,6 +68,7 @@ def find_metadata_path(original_root: str, split_root: Path) -> Optional[Path]:
     return None
 
 
+# Формирует порядок классов по папкам train с учётом заданного или стандартного порядка
 def ordered_classes_from_train(train_dir: Path, class_order: Optional[Sequence[str]] = None) -> List[str]:
     found = sorted([p.name for p in train_dir.iterdir() if p.is_dir()])
     if class_order is not None:
@@ -73,22 +82,24 @@ def ordered_classes_from_train(train_dir: Path, class_order: Optional[Sequence[s
     return ordered
 
 
+# Изменяет размер изображения бикубической интерполяцией
 def pil_resize_bicubic(img: Image.Image, size: Tuple[int, int]) -> Image.Image:
     resampling = getattr(Image, "Resampling", None)
     bicubic = resampling.BICUBIC if resampling is not None else Image.BICUBIC
     return img.resize(size, bicubic)
 
 
+# Инициализирует датасет одного разбиения train/val/test и сканирует изображения
 class LPISpectrogramDataset(Dataset):
     def __init__(
-        self,
-        split_root: Path,
-        split: str,
-        classes: Sequence[str],
-        image_size: int = 224,
-        augment: bool = False,
-        mean: float = 0.5,
-        std: float = 0.5,
+            self,
+            split_root: Path,
+            split: str,
+            classes: Sequence[str],
+            image_size: int = 224,
+            augment: bool = False,
+            mean: float = 0.5,
+            std: float = 0.5,
     ) -> None:
         self.split_root = Path(split_root)
         self.split = str(split)
@@ -103,6 +114,7 @@ class LPISpectrogramDataset(Dataset):
         if not self.samples:
             raise FileNotFoundError("No images found in {}".format(self.root))
 
+    # Рекурсивно собирает пути к изображениям и соответствующие числовые метки
     def _scan(self) -> List[Tuple[str, int]]:
         samples = []
         for class_name in self.classes:
@@ -115,11 +127,12 @@ class LPISpectrogramDataset(Dataset):
                     samples.append((str(path), label))
         return samples
 
+    # Возвращает число объектов в датасете
     def __len__(self) -> int:
         return len(self.samples)
 
+    # Выполняет аугментацию спектрограмм без поворотов и отражений
     def _augment_image(self, img: Image.Image) -> Image.Image:
-        # Conservative augmentations for spectrogram-like images. No flips/rotations.
         if random.random() < 0.35:
             arr = np.asarray(img)
             max_shift = max(1, int(round(0.02 * self.image_size)))
@@ -141,6 +154,7 @@ class LPISpectrogramDataset(Dataset):
             img = Image.fromarray(arr)
         return img
 
+    # Загружает изображение, нормирует его и возвращает тензор, метку и путь
     def __getitem__(self, index: int):
         path, label = self.samples[index]
         img = Image.open(path).convert("L")
@@ -155,13 +169,14 @@ class LPISpectrogramDataset(Dataset):
         return x, y, path
 
 
+# Создаёт датасеты train/val/test с единым порядком классов
 def make_datasets(
-    data_root: str,
-    image_size: int,
-    augment: bool,
-    mean: float,
-    std: float,
-    class_order: Optional[Sequence[str]] = None,
+        data_root: str,
+        image_size: int,
+        augment: bool,
+        mean: float,
+        std: float,
+        class_order: Optional[Sequence[str]] = None,
 ):
     split_root = resolve_dataset_root(data_root)
     train_dir = split_root / "train"
@@ -178,6 +193,7 @@ def make_datasets(
     return split_root, train_ds, val_ds, test_ds
 
 
+# Загружает из metadata.csv соответствие путь_к_файлу -> ОСШ
 def load_metadata_snr_map(metadata_path: Optional[Path]) -> Dict[str, float]:
     if metadata_path is None or not Path(metadata_path).is_file():
         return {}
@@ -200,6 +216,7 @@ def load_metadata_snr_map(metadata_path: Optional[Path]) -> Dict[str, float]:
     return snr_map
 
 
+# Загружает из metadata.csv соответствие путь_к_файлу -> ОСШ
 def snr_from_filename(path: str) -> Optional[float]:
     name = Path(path).name
     patterns = [
@@ -219,6 +236,7 @@ def snr_from_filename(path: str) -> Optional[float]:
     return None
 
 
+# Возвращает ОСШ для файла: сначала из metadata.csv, затем из имени файла
 def snr_for_path(path: str, split_root: Path, snr_map: Dict[str, float]) -> Optional[float]:
     p = Path(path).resolve()
     try:
